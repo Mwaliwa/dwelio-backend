@@ -1,232 +1,501 @@
 const express = require("express");
 const router = express.Router();
+
 const db = require("../db");
-const auth = require("../middleware/auth"); // must set req.user = { id, role, ... }
+const auth = require("../middleware/auth");
+
+console.log(">>> agentRequests.js LOADED SUCCESSFULLY");
 
 // =====================================================
-// CUSTOMER: Submit request to become agent
+// ADMIN AUTHORIZATION
+// =====================================================
+const adminOnly = (req, res, next) => {
+  if (!req.user || req.user.role !== "admin") {
+    return res.status(403).json({
+      success: false,
+      error: "Admin access required",
+    });
+  }
+  next();
+};
+
+// =====================================================
+// CUSTOMER: GET MY LATEST AGENT REQUEST
+// GET /api/agent-requests/me
+// =====================================================
+router.get("/me", auth, async (req, res) => {
+  console.log(">>> HIT /api/agent-requests/me HANDLER");
+  try {
+    const [requests] = await db.query(
+      `
+      SELECT
+        id,
+        user_id,
+        full_name,
+        phone,
+        email,
+        national_id,
+        date_of_birth,
+        gender,
+        address,
+        city,
+        occupation,
+        experience,
+        company_name,
+        license_number,
+        property_types,
+        operating_areas,
+        message,
+        status,
+        admin_note,
+        created_at,
+        updated_at
+      FROM agent_requests
+      WHERE user_id = ?
+      ORDER BY created_at DESC
+      LIMIT 1
+      `,
+      [req.user.id]
+    );
+
+    return res.status(200).json({
+      success: true,
+      request: requests.length ? requests[0] : null,
+    });
+  } catch (err) {
+    console.error("GET /agent-requests/me error:", err);
+    return res.status(500).json({
+      success: false,
+      error: "Failed to fetch your agent application",
+    });
+  }
+});
+
+// =====================================================
+// CUSTOMER: SUBMIT AGENT APPLICATION
 // POST /api/agent-requests
 // =====================================================
 router.post("/", auth, async (req, res) => {
   try {
-    const userId = req.user.id;
-    const { message } = req.body;
-
-    const [users] = await db.query(
-      "SELECT id, role FROM users WHERE id = ? LIMIT 1",
-      [userId]
-    );
-
-    if (!users.length) {
-      return res.status(404).json({
+    if (req.user.role !== "customer") {
+      return res.status(403).json({
         success: false,
-        error: "User not found",
+        error: "Only customer accounts can apply to become agents",
       });
     }
 
-    if (users[0].role === "agent" || users[0].role === "admin") {
-      return res.status(400).json({
-        success: false,
-        error: "You are already an agent or admin",
-      });
+    const {
+      full_name,
+      phone,
+      email,
+      national_id,
+      date_of_birth,
+      gender,
+      address,
+      city,
+      occupation,
+      experience,
+      company_name,
+      license_number,
+      property_types,
+      operating_areas,
+      message,
+    } = req.body;
+
+    const requiredFields = {
+      full_name,
+      phone,
+      email,
+      national_id,
+      date_of_birth,
+      gender,
+      address,
+      city,
+      occupation,
+      experience,
+      property_types,
+      operating_areas,
+      message,
+    };
+
+    for (const [field, value] of Object.entries(requiredFields)) {
+      if (!value || String(value).trim() === "") {
+        return res.status(400).json({
+          success: false,
+          error: `${field.replace(/_/g, " ")} is required`,
+        });
+      }
     }
 
-    const [existing] = await db.query(
-      `SELECT id FROM agent_requests
-       WHERE user_id = ? AND status = 'pending'
-       LIMIT 1`,
-      [userId]
+    const [pendingRequests] = await db.query(
+      `
+      SELECT id, status
+      FROM agent_requests
+      WHERE user_id = ?
+        AND status = 'pending'
+      ORDER BY created_at DESC
+      LIMIT 1
+      `,
+      [req.user.id]
     );
 
-    if (existing.length > 0) {
-      return res.status(400).json({
+    if (pendingRequests.length > 0) {
+      return res.status(409).json({
         success: false,
-        error: "You already have a pending request",
+        error: "You already have a pending agent application",
+        request: pendingRequests[0],
       });
     }
 
     const [result] = await db.query(
-      `INSERT INTO agent_requests (user_id, message, status)
-       VALUES (?, ?, 'pending')`,
-      [userId, message ? String(message).trim() : null]
+      `
+      INSERT INTO agent_requests (
+        user_id,
+        full_name,
+        phone,
+        email,
+        national_id,
+        date_of_birth,
+        gender,
+        address,
+        city,
+        occupation,
+        experience,
+        company_name,
+        license_number,
+        property_types,
+        operating_areas,
+        message,
+        status,
+        created_at,
+        updated_at
+      )
+      VALUES (
+        ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
+        ?, ?, ?, ?, ?, ?,
+        'pending',
+        CURRENT_TIMESTAMP,
+        CURRENT_TIMESTAMP
+      )
+      `,
+      [
+        req.user.id,
+        String(full_name).trim(),
+        String(phone).trim(),
+        String(email).trim().toLowerCase(),
+        String(national_id).trim(),
+        date_of_birth,
+        String(gender).trim(),
+        String(address).trim(),
+        String(city).trim(),
+        String(occupation).trim(),
+        String(experience).trim(),
+        company_name ? String(company_name).trim() : null,
+        license_number ? String(license_number).trim() : null,
+        String(property_types).trim(),
+        String(operating_areas).trim(),
+        String(message).trim(),
+      ]
     );
 
-    const [rows] = await db.query(
-      `SELECT id, message, status, admin_note, created_at, updated_at
-       FROM agent_requests
-       WHERE id = ?
-       LIMIT 1`,
+    const [createdRequests] = await db.query(
+      `
+      SELECT
+        id,
+        user_id,
+        full_name,
+        phone,
+        email,
+        national_id,
+        date_of_birth,
+        gender,
+        address,
+        city,
+        occupation,
+        experience,
+        company_name,
+        license_number,
+        property_types,
+        operating_areas,
+        message,
+        status,
+        admin_note,
+        created_at,
+        updated_at
+      FROM agent_requests
+      WHERE id = ?
+      LIMIT 1
+      `,
       [result.insertId]
     );
 
     return res.status(201).json({
       success: true,
-      message: "Your request to become an agent has been submitted",
-      request: rows[0] || null,
+      message: "Agent application submitted successfully",
+      request: createdRequests[0] || null,
     });
   } catch (err) {
-    console.error("Agent request error:", err);
+    console.error("POST /agent-requests error:", err);
     return res.status(500).json({
       success: false,
-      error: "Server error",
+      error: "Failed to submit agent application",
     });
   }
 });
 
 // =====================================================
-// CUSTOMER: Check my request status
-// GET /api/agent-requests/me
+// ADMIN: GET AGENT REQUESTS
+// GET /api/agent-requests/admin?status=pending
 // =====================================================
-router.get("/me", auth, async (req, res) => {
+router.get("/admin", auth, adminOnly, async (req, res) => {
   try {
-    const [rows] = await db.query(
-      `SELECT id, message, status, admin_note, created_at, updated_at
-       FROM agent_requests
-       WHERE user_id = ?
-       ORDER BY created_at DESC
-       LIMIT 1`,
-      [req.user.id]
-    );
+    const requestedStatus = String(req.query.status || "pending")
+      .trim()
+      .toLowerCase();
 
-    return res.json({
-      success: true,
-      request: rows[0] || null,
-    });
-  } catch (err) {
-    console.error("Get my agent request error:", err);
-    return res.status(500).json({
-      success: false,
-      error: "Server error",
-    });
-  }
-});
+    const allowedStatuses = ["pending", "approved", "rejected", "all"];
 
-// =====================================================
-// ADMIN: Get all agent requests
-// GET /api/agent-requests/admin
-// (If you prefer /api/admin/agent-requests, mount this under adminRoutes instead)
-// =====================================================
-router.get("/admin", auth, async (req, res) => {
-  try {
-    if (req.user.role !== "admin") {
-      return res.status(403).json({
+    if (!allowedStatuses.includes(requestedStatus)) {
+      return res.status(400).json({
         success: false,
-        error: "Admin only",
+        error: "Invalid status filter",
+        allowedStatuses,
       });
     }
 
-    const { status } = req.query;
-
-    let query = `
-      SELECT 
+    let sql = `
+      SELECT
         ar.id,
+        ar.user_id,
+        ar.full_name,
+        ar.phone,
+        ar.email,
+        ar.national_id,
+        ar.date_of_birth,
+        ar.gender,
+        ar.address,
+        ar.city,
+        ar.occupation,
+        ar.experience,
+        ar.company_name,
+        ar.license_number,
+        ar.property_types,
+        ar.operating_areas,
         ar.message,
         ar.status,
         ar.admin_note,
+        ar.reviewed_by,
         ar.created_at,
         ar.updated_at,
-        u.id AS user_id,
-        u.name,
-        u.email,
-        u.phone
+        COALESCE(u.name, ar.full_name, 'Unknown User') AS user_name
       FROM agent_requests ar
-      JOIN users u ON u.id = ar.user_id
+      LEFT JOIN users u
+        ON u.id = ar.user_id
     `;
+
     const params = [];
 
-    if (status) {
-      query += " WHERE ar.status = ?";
-      params.push(status);
+    if (requestedStatus !== "all") {
+      sql += ` WHERE ar.status = ?`;
+      params.push(requestedStatus);
     }
 
-    query += " ORDER BY ar.created_at DESC";
+    sql += ` ORDER BY ar.created_at DESC`;
 
-    const [rows] = await db.query(query, params);
+    const [requests] = await db.query(sql, params);
 
-    return res.json({
+    return res.status(200).json({
       success: true,
-      requests: rows,
+      count: requests.length,
+      requests,
     });
   } catch (err) {
-    console.error("Admin list agent requests error:", err);
+    console.error("GET /agent-requests/admin error:", err);
     return res.status(500).json({
       success: false,
-      error: "Server error",
+      error: "Failed to fetch agent requests",
     });
   }
 });
 
 // =====================================================
-// ADMIN: Approve or Reject request
+// ADMIN: APPROVE / REJECT AGENT APPLICATION
 // PATCH /api/agent-requests/admin/:id
 // =====================================================
-router.patch("/admin/:id", auth, async (req, res) => {
+router.patch("/admin/:id", auth, adminOnly, async (req, res) => {
+  let connection;
+
   try {
-    if (req.user.role !== "admin") {
-      return res.status(403).json({
+    const requestId = Number(req.params.id);
+    const status = String(req.body.status || "").trim().toLowerCase();
+    const adminNote =
+      typeof req.body.admin_note === "string"
+        ? req.body.admin_note.trim()
+        : null;
+
+    if (!Number.isInteger(requestId) || requestId <= 0) {
+      return res.status(400).json({
         success: false,
-        error: "Admin only",
+        error: "Invalid request ID",
       });
     }
-
-    const { id } = req.params;
-    const { status, admin_note } = req.body;
 
     if (!["approved", "rejected"].includes(status)) {
       return res.status(400).json({
         success: false,
-        error: "Status must be 'approved' or 'rejected'",
+        error: "Status must be approved or rejected",
       });
     }
 
-    const [requests] = await db.query(
-      `SELECT * FROM agent_requests WHERE id = ? LIMIT 1`,
-      [id]
+    connection = await db.getConnection();
+    await connection.beginTransaction();
+
+    const [requests] = await connection.query(
+      `
+      SELECT *
+      FROM agent_requests
+      WHERE id = ?
+      LIMIT 1
+      FOR UPDATE
+      `,
+      [requestId]
     );
 
     if (!requests.length) {
+      await connection.rollback();
       return res.status(404).json({
         success: false,
-        error: "Request not found",
+        error: "Agent request not found",
       });
     }
 
     const request = requests[0];
 
     if (request.status !== "pending") {
-      return res.status(400).json({
+      await connection.rollback();
+      return res.status(409).json({
         success: false,
         error: "This request has already been reviewed",
       });
     }
 
-    // Update request (works even if reviewed_by column is missing — adjust if needed)
-    await db.query(
-      `UPDATE agent_requests
-       SET status = ?,
-           admin_note = ?,
-           reviewed_by = ?,
-           updated_at = CURRENT_TIMESTAMP
-       WHERE id = ?`,
-      [status, admin_note || null, req.user.id, id]
-    );
+    let agentCode = null;
 
     if (status === "approved") {
-      await db.query(`UPDATE users SET role = 'agent' WHERE id = ?`, [
-        request.user_id,
-      ]);
+      const [users] = await connection.query(
+        `
+        SELECT id, role, agent_code
+        FROM users
+        WHERE id = ?
+        LIMIT 1
+        FOR UPDATE
+        `,
+        [request.user_id]
+      );
+
+      if (!users.length) {
+        await connection.rollback();
+        return res.status(404).json({
+          success: false,
+          error: "Applicant user account not found",
+        });
+      }
+
+      const [codes] = await connection.query(
+        `
+        SELECT agent_code
+        FROM users
+        WHERE agent_code IS NOT NULL
+          AND agent_code LIKE 'MALO-AG-%'
+        ORDER BY agent_code DESC
+        LIMIT 1
+        `
+      );
+
+      let nextNumber = 1;
+      if (codes.length) {
+        const lastCode = codes[0].agent_code;
+        const match = /^MALO-AG-(\d+)$/.exec(lastCode);
+        if (match) {
+          nextNumber = Number(match[1]) + 1;
+        }
+      }
+
+      agentCode = `MALO-AG-${String(nextNumber).padStart(4, "0")}`;
+
+      const [updateUser] = await connection.query(
+        `
+        UPDATE users
+        SET
+          role = 'agent',
+          agent_code = ?,
+          updated_at = CURRENT_TIMESTAMP
+        WHERE id = ?
+        `,
+        [agentCode, request.user_id]
+      );
+
+      if (updateUser.affectedRows === 0) {
+        await connection.rollback();
+        return res.status(404).json({
+          success: false,
+          error: "Applicant user account could not be updated",
+        });
+      }
     }
 
-    return res.json({
+    const [updateRequest] = await connection.query(
+      `
+      UPDATE agent_requests
+      SET
+        status = ?,
+        admin_note = ?,
+        reviewed_by = ?,
+        updated_at = CURRENT_TIMESTAMP
+      WHERE id = ?
+        AND status = 'pending'
+      `,
+      [status, adminNote || null, req.user.id, requestId]
+    );
+
+    if (updateRequest.affectedRows === 0) {
+      await connection.rollback();
+      return res.status(409).json({
+        success: false,
+        error: "This request has already been reviewed",
+      });
+    }
+
+    await connection.commit();
+
+    return res.status(200).json({
       success: true,
-      message: `Request ${status} successfully`,
+      message:
+        status === "approved"
+          ? "Agent application approved successfully"
+          : "Agent application rejected successfully",
+      request_id: requestId,
+      status,
+      agent_code: agentCode,
     });
   } catch (err) {
-    console.error("Admin review agent request error:", err);
+    if (connection) {
+      try {
+        await connection.rollback();
+      } catch (rollbackError) {
+        console.error("Agent request rollback error:", rollbackError);
+      }
+    }
+
+    console.error("PATCH /agent-requests/admin/:id error:", err);
     return res.status(500).json({
       success: false,
-      error: "Server error",
+      error: "Failed to process agent request",
     });
+  } finally {
+    if (connection) {
+      connection.release();
+    }
   }
 });
 

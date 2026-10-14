@@ -6,53 +6,108 @@ function setupChatSocket(io) {
   io.on("connection", (socket) => {
     console.log("✅ User connected:", socket.id);
 
-    // Join a conversation room
+    // ========================
+    // JOIN CONVERSATION
+    // ========================
     socket.on("join_conversation", (conversationId) => {
       if (!conversationId) return;
+
       const room = `conversation_${conversationId}`;
       socket.join(room);
+
       console.log(`➡️  Socket ${socket.id} joined ${room}`);
     });
 
-    // Leave a conversation room
+    // ========================
+    // LEAVE CONVERSATION
+    // ========================
     socket.on("leave_conversation", (conversationId) => {
       if (!conversationId) return;
+
       const room = `conversation_${conversationId}`;
       socket.leave(room);
+
       console.log(`⬅️  Socket ${socket.id} left ${room}`);
     });
 
-    // Send a new message (realtime)
+    // ========================
+    // SEND MESSAGE (Text + Media)
+    // ========================
     socket.on("send_message", (data) => {
-      if (!data || !data.conversation_id || !data.text) return;
+      if (!data || !data.conversation_id) return;
+
+      // At least text or media must exist
+      if (!data.text && !data.media_url) return;
 
       const room = `conversation_${data.conversation_id}`;
 
-      // Broadcast to everyone in the room
-      io.to(room).emit("new_message", {
+      const payload = {
         id: data.id || Date.now(),
-        conversation_id: data.conversation_id,
-        sender_id: data.sender_id,
-        text: data.text,
-        created_at: data.created_at || new Date().toISOString(),
+        conversation_id: Number(data.conversation_id),
+        sender_id: Number(data.sender_id),
+        text: data.text || null,
+        type: data.type || "text",          // text | image | video
+        media_url: data.media_url || null,
         is_read: false,
-      });
+        created_at: data.created_at || new Date().toISOString(),
+      };
 
-      console.log(`💬 Message → ${room}:`, data.text);
+      // Broadcast to everyone in the room (including sender for confirmation)
+      io.to(room).emit("new_message", payload);
+
+      // Log nicely
+      if (payload.type === "image") {
+        console.log(`🖼️  Image → ${room}`);
+      } else if (payload.type === "video") {
+        console.log(`🎥 Video → ${room}`);
+      } else {
+        console.log(`💬 Text → ${room}:`, payload.text);
+      }
     });
 
-    // Mark messages as read
+    // ========================
+    // MARK MESSAGES AS READ
+    // ========================
     socket.on("mark_as_read", (data) => {
       if (!data || !data.conversation_id) return;
 
       const room = `conversation_${data.conversation_id}`;
-      io.to(room).emit("messages_read", data);
+      io.to(room).emit("messages_read", {
+        conversation_id: data.conversation_id,
+        user_id: data.user_id || null,
+      });
+
       console.log(`👁️  Messages read in ${room}`);
     });
 
-    // Disconnect
-    socket.on("disconnect", () => {
-      console.log("❌ User disconnected:", socket.id);
+    // ========================
+    // TYPING INDICATORS (optional but useful)
+    // ========================
+    socket.on("typing_start", (data) => {
+      if (!data?.conversation_id) return;
+      const room = `conversation_${data.conversation_id}`;
+      socket.to(room).emit("user_typing", {
+        conversation_id: data.conversation_id,
+        user_id: data.user_id,
+        isTyping: true,
+      });
+    });
+
+    socket.on("typing_stop", (data) => {
+      if (!data?.conversation_id) return;
+      const room = `conversation_${data.conversation_id}`;
+      socket.to(room).emit("user_typing", {
+        conversation_id: data.conversation_id,
+        user_id: data.user_id,
+        isTyping: false,
+      });
+    });
+
+    // ========================
+    // DISCONNECT
+    // ========================
+    socket.on("disconnect", (reason) => {
+      console.log(`❌ User disconnected: ${socket.id} (${reason})`);
     });
   });
 }

@@ -1,7 +1,10 @@
+// index.js  (or server.js)
+
 const express = require("express");
 const cors = require("cors");
 const bcrypt = require("bcrypt");
 const path = require("path");
+const fs = require("fs");
 const http = require("http");
 const { Server } = require("socket.io");
 require("dotenv").config();
@@ -23,8 +26,8 @@ const offersRoutes = require("./routes/offers");
 const chatRoutes = require("./routes/chat");
 const agentRequestsRoutes = require("./routes/agentRequests");
 const agentRoutes = require("./routes/agent");
-const viewsRoutes = require("./routes/views");           // ← NEW
-const inquiriesRoutes = require("./routes/inquiries");   // ← NEW
+const viewsRoutes = require("./routes/views");
+const inquiriesRoutes = require("./routes/inquiries");
 
 const setupChatSocket = require("./socket/chatSocket");
 
@@ -34,10 +37,26 @@ const app = express();
 // CONFIG
 // ========================
 const PORT = process.env.PORT || 5001;
-const VERSION = "3.5.0"; // bumped version
+const VERSION = "3.6.0";
 const NODE_ENV = process.env.NODE_ENV || "development";
 
 console.log("🚀 DWELIO BACKEND STARTING...");
+
+// ========================
+// ENSURE UPLOAD DIRECTORIES EXIST
+// ========================
+const uploadDirs = [
+  path.join(__dirname, "uploads"),
+  path.join(__dirname, "uploads/chat"),
+  path.join(__dirname, "uploads/properties"),
+];
+
+uploadDirs.forEach((dir) => {
+  if (!fs.existsSync(dir)) {
+    fs.mkdirSync(dir, { recursive: true });
+    console.log(`📁 Created directory: ${dir}`);
+  }
+});
 
 // ========================
 // CORS
@@ -75,10 +94,10 @@ app.use(
 // ========================
 // MIDDLEWARE
 // ========================
-app.use(express.json({ limit: "10mb" }));
-app.use(express.urlencoded({ extended: true, limit: "10mb" }));
+app.use(express.json({ limit: "25mb" }));
+app.use(express.urlencoded({ extended: true, limit: "25mb" }));
 
-// Static files (property images, uploads, etc.)
+// Static files (property images, chat media, etc.)
 app.use("/uploads", express.static(path.join(__dirname, "uploads")));
 
 // Simple request logger
@@ -105,6 +124,7 @@ app.get("/", (req, res) => {
     features: [
       "chat",
       "realtime",
+      "media-messages",
       "agent-requests",
       "agent-dashboard",
       "views",
@@ -151,8 +171,8 @@ const routes = [
   ["/api/chat", chatRoutes],
   ["/api/agent-requests", agentRequestsRoutes],
   ["/api/agent", agentRoutes],
-  ["/api/views", viewsRoutes],           // ← NEW
-  ["/api/inquiries", inquiriesRoutes],   // ← NEW
+  ["/api/views", viewsRoutes],
+  ["/api/inquiries", inquiriesRoutes],
 ];
 
 routes.forEach(([routePath, router]) => {
@@ -215,6 +235,23 @@ app.use((req, res) => {
 // GLOBAL ERROR HANDLER
 // ========================
 app.use((err, req, res, next) => {
+  // Multer errors
+  if (err.code === "LIMIT_FILE_SIZE") {
+    return res.status(400).json({
+      success: false,
+      error: "File too large",
+      message: "Maximum file size is 20MB",
+    });
+  }
+
+  if (err.message && err.message.includes("Only images and videos are allowed")) {
+    return res.status(400).json({
+      success: false,
+      error: "Invalid file type",
+      message: err.message,
+    });
+  }
+
   if (err.message && err.message.includes("Not allowed by CORS")) {
     return res.status(403).json({
       success: false,
@@ -244,6 +281,7 @@ const io = new Server(server, {
     methods: ["GET", "POST"],
     credentials: true,
   },
+  maxHttpBufferSize: 25e6, // 25MB for larger media if needed
 });
 
 // Make io accessible from routes if needed
@@ -263,6 +301,7 @@ server.listen(PORT, async () => {
   console.log(`📦 Version: ${VERSION}`);
   console.log(`🌍 Environment: ${NODE_ENV}`);
   console.log(`💬 Real-time Chat: ENABLED`);
+  console.log(`🖼️  Media Messages (Image/Video): ENABLED`);
   console.log(`🧑‍💼 Agent Requests: ENABLED`);
   console.log(`📊 Agent Dashboard: ENABLED`);
   console.log(`👁️  Views: ENABLED`);

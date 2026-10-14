@@ -1,10 +1,61 @@
-// routes/chat.js  (or wherever this lives)
+// routes/chat.js
 
 const express = require("express");
 const router = express.Router();
+const multer = require("multer");
+const path = require("path");
+const fs = require("fs");
 
 const db = require("../db");
 const authenticateToken = require("../middleware/auth");
+
+/* =========================================================
+   MULTER CONFIG (for images & videos)
+========================================================= */
+
+const uploadDir = path.join(__dirname, "../uploads/chat");
+
+// Create folder if it doesn't exist
+if (!fs.existsSync(uploadDir)) {
+  fs.mkdirSync(uploadDir, { recursive: true });
+}
+
+const storage = multer.diskStorage({
+  destination: (req, file, cb) => {
+    cb(null, uploadDir);
+  },
+  filename: (req, file, cb) => {
+    const uniqueSuffix = Date.now() + "-" + Math.round(Math.random() * 1e9);
+    const ext = path.extname(file.originalname).toLowerCase();
+    cb(null, `chat-${uniqueSuffix}${ext}`);
+  },
+});
+
+const fileFilter = (req, file, cb) => {
+  const allowed = [
+    "image/jpeg",
+    "image/png",
+    "image/webp",
+    "image/gif",
+    "video/mp4",
+    "video/webm",
+    "video/quicktime",
+  ];
+
+  if (allowed.includes(file.mimetype)) {
+    cb(null, true);
+  } else {
+    cb(new Error("Only images and videos are allowed"), false);
+  }
+};
+
+const upload = multer({
+  storage,
+  fileFilter,
+  limits: {
+    fileSize: 20 * 1024 * 1024, // 20MB
+  },
+});
 
 /* =========================================================
    HELPERS
@@ -21,9 +72,7 @@ function sendServerError(res, message, error) {
     error: "Server error",
     message,
     details:
-      process.env.NODE_ENV === "development"
-        ? error?.message
-        : undefined,
+      process.env.NODE_ENV === "development" ? error?.message : undefined,
   });
 }
 
@@ -35,10 +84,6 @@ function getUserRole(req) {
   return String(req.user?.role || "").toLowerCase();
 }
 
-/**
- * Normalize a conversation row so the frontend always receives
- * a consistent shape (especially unread_count + property_name).
- */
 function mapConversation(row, role) {
   if (!row) return null;
 
@@ -60,25 +105,20 @@ function mapConversation(row, role) {
     last_message_at: row.last_message_at || null,
     last_message_sender_id: row.last_message_sender_id || null,
 
-    // Frontend expects a single unread_count field
     unread_count: isCustomer
       ? Number(row.unread_by_customer || 0)
       : Number(row.unread_by_agent || 0),
 
-    // Keep the raw counters as well (useful for debugging / other clients)
     unread_by_customer: Number(row.unread_by_customer || 0),
     unread_by_agent: Number(row.unread_by_agent || 0),
 
     status: row.status || "active",
-    avatar: row.avatar || null, // populated if you join users later
+    avatar: row.avatar || null,
 
     created_at: row.created_at,
     updated_at: row.updated_at,
 
-    // Convenience field used by some UIs
-    other_user_name: isCustomer
-      ? row.agent_name
-      : row.customer_name,
+    other_user_name: isCustomer ? row.agent_name : row.customer_name,
   };
 }
 
@@ -102,7 +142,6 @@ router.post("/start", authenticateToken, async (req, res) => {
       });
     }
 
-    // Only customers should normally start chats
     if (role && role !== "customer") {
       return res.status(403).json({
         success: false,
@@ -126,14 +165,8 @@ router.post("/start", authenticateToken, async (req, res) => {
       });
     }
 
-    // ---------- Get property ----------
     const [properties] = await db.query(
-      `
-      SELECT id, title, user_id
-      FROM properties
-      WHERE id = ?
-      LIMIT 1
-      `,
+      `SELECT id, title, user_id FROM properties WHERE id = ? LIMIT 1`,
       [propertyId]
     );
 
@@ -154,7 +187,6 @@ router.post("/start", authenticateToken, async (req, res) => {
       });
     }
 
-    // Prevent chatting with yourself
     if (agentId === userId) {
       return res.status(400).json({
         success: false,
@@ -162,14 +194,8 @@ router.post("/start", authenticateToken, async (req, res) => {
       });
     }
 
-    // ---------- Get agent ----------
     const [agents] = await db.query(
-      `
-      SELECT id, name, role
-      FROM users
-      WHERE id = ?
-      LIMIT 1
-      `,
+      `SELECT id, name, role FROM users WHERE id = ? LIMIT 1`,
       [agentId]
     );
 
@@ -183,7 +209,6 @@ router.post("/start", authenticateToken, async (req, res) => {
     const agent = agents[0];
     const agentName = agent.name || "Agent";
 
-    // ---------- Check existing conversation ----------
     const [existing] = await db.query(
       `
       SELECT *
@@ -208,7 +233,6 @@ router.post("/start", authenticateToken, async (req, res) => {
       });
     }
 
-    // ---------- Create new conversation ----------
     const [result] = await db.query(
       `
       INSERT INTO conversations
@@ -258,8 +282,6 @@ router.post("/start", authenticateToken, async (req, res) => {
 
 /* =========================================================
    GET ALL CONVERSATIONS
-   GET /api/chat
-   GET /api/chat/conversations   (kept for backward compatibility)
 ========================================================= */
 
 async function handleGetConversations(req, res) {
@@ -286,7 +308,6 @@ async function handleGetConversations(req, res) {
       `;
       params = [userId];
     } else {
-      // agent / landlord / admin viewing as agent
       query = `
         SELECT c.*
         FROM conversations c
@@ -305,7 +326,6 @@ async function handleGetConversations(req, res) {
     return res.json({
       success: true,
       conversations,
-      // also expose as array for clients that expect a raw list
       data: conversations,
     });
   } catch (err) {
@@ -313,10 +333,7 @@ async function handleGetConversations(req, res) {
   }
 }
 
-// Primary endpoint used by the polished CustomerChat frontend
 router.get("/", authenticateToken, handleGetConversations);
-
-// Keep the old path working
 router.get("/conversations", authenticateToken, handleGetConversations);
 
 /* =========================================================
@@ -339,7 +356,6 @@ router.get(
         });
       }
 
-      // Access check
       const [conversation] = await db.query(
         `
         SELECT id, customer_id, agent_id
@@ -365,6 +381,8 @@ router.get(
           conversation_id,
           sender_id,
           text,
+          type,
+          media_url,
           is_read,
           created_at
         FROM messages
@@ -374,9 +392,21 @@ router.get(
         [conversationId]
       );
 
+      // Make media_url absolute
+      const mappedMessages = (messages || []).map((msg) => ({
+        ...msg,
+        media_url: msg.media_url
+          ? msg.media_url.startsWith("http")
+            ? msg.media_url
+            : `${req.protocol}://${req.get("host")}/uploads/chat/${path.basename(
+                msg.media_url
+              )}`
+          : null,
+      }));
+
       return res.json({
         success: true,
-        messages: messages || [],
+        messages: mappedMessages,
       });
     } catch (err) {
       return sendServerError(res, "Error fetching messages", err);
@@ -385,7 +415,7 @@ router.get(
 );
 
 /* =========================================================
-   SEND MESSAGE
+   SEND TEXT MESSAGE
    POST /api/chat/messages
 ========================================================= */
 
@@ -418,7 +448,6 @@ router.post("/messages", authenticateToken, async (req, res) => {
       });
     }
 
-    // Access check
     const [conversation] = await db.query(
       `
       SELECT id, customer_id, agent_id
@@ -440,17 +469,16 @@ router.post("/messages", authenticateToken, async (req, res) => {
     const conversationData = conversation[0];
     const isCustomer = Number(conversationData.customer_id) === userId;
 
-    // Insert message
     const [result] = await db.query(
       `
       INSERT INTO messages
-        (conversation_id, sender_id, text, is_read, created_at)
-      VALUES (?, ?, ?, FALSE, NOW())
+        (conversation_id, sender_id, text, type, media_url, is_read, created_at)
+      VALUES (?, ?, ?, 'text', NULL, FALSE, NOW())
       `,
       [conversationId, userId, message]
     );
 
-    // Update conversation + unread counters
+    // Update conversation
     if (isCustomer) {
       await db.query(
         `
@@ -486,6 +514,8 @@ router.post("/messages", authenticateToken, async (req, res) => {
       conversation_id: conversationId,
       sender_id: userId,
       text: message,
+      type: "text",
+      media_url: null,
       is_read: false,
       created_at: new Date().toISOString(),
     };
@@ -499,6 +529,159 @@ router.post("/messages", authenticateToken, async (req, res) => {
     return sendServerError(res, "Error sending message", err);
   }
 });
+
+/* =========================================================
+   SEND MEDIA MESSAGE (Image / Video)
+   POST /api/chat/messages/media
+========================================================= */
+
+router.post(
+  "/messages/media",
+  authenticateToken,
+  upload.single("file"),
+  async (req, res) => {
+    try {
+      const userId = getUserId(req);
+      const { conversation_id, text, type } = req.body || {};
+
+      const conversationId = Number(conversation_id);
+
+      if (!Number.isInteger(conversationId) || conversationId <= 0) {
+        return res.status(400).json({
+          success: false,
+          error: "conversation_id is required and must be valid.",
+        });
+      }
+
+      if (!req.file) {
+        return res.status(400).json({
+          success: false,
+          error: "No file uploaded.",
+        });
+      }
+
+      // Determine type
+      let messageType = type;
+      if (!messageType) {
+        messageType = req.file.mimetype.startsWith("video/")
+          ? "video"
+          : "image";
+      }
+
+      if (!["image", "video"].includes(messageType)) {
+        return res.status(400).json({
+          success: false,
+          error: "Invalid media type.",
+        });
+      }
+
+      const caption = typeof text === "string" ? text.trim() : null;
+      const mediaUrl = req.file.filename; // relative path
+
+      // Access check
+      const [conversation] = await db.query(
+        `
+        SELECT id, customer_id, agent_id
+        FROM conversations
+        WHERE id = ?
+          AND (customer_id = ? OR agent_id = ?)
+        LIMIT 1
+        `,
+        [conversationId, userId, userId]
+      );
+
+      if (!conversation?.length) {
+        // Delete uploaded file if access denied
+        fs.unlinkSync(req.file.path);
+        return res.status(403).json({
+          success: false,
+          error: "Access denied",
+        });
+      }
+
+      const conversationData = conversation[0];
+      const isCustomer = Number(conversationData.customer_id) === userId;
+
+      // Insert message
+      const [result] = await db.query(
+        `
+        INSERT INTO messages
+          (conversation_id, sender_id, text, type, media_url, is_read, created_at)
+        VALUES (?, ?, ?, ?, ?, FALSE, NOW())
+        `,
+        [conversationId, userId, caption, messageType, mediaUrl]
+      );
+
+      // Create nice last_message preview
+      const lastMessagePreview =
+        messageType === "image"
+          ? caption
+            ? `📷 ${caption}`
+            : "📷 Image"
+          : caption
+          ? `🎥 ${caption}`
+          : "🎥 Video";
+
+      // Update conversation
+      if (isCustomer) {
+        await db.query(
+          `
+          UPDATE conversations
+          SET
+            last_message = ?,
+            last_message_at = NOW(),
+            last_message_sender_id = ?,
+            unread_by_agent = COALESCE(unread_by_agent, 0) + 1,
+            updated_at = NOW()
+          WHERE id = ?
+          `,
+          [lastMessagePreview, userId, conversationId]
+        );
+      } else {
+        await db.query(
+          `
+          UPDATE conversations
+          SET
+            last_message = ?,
+            last_message_at = NOW(),
+            last_message_sender_id = ?,
+            unread_by_customer = COALESCE(unread_by_customer, 0) + 1,
+            updated_at = NOW()
+          WHERE id = ?
+          `,
+          [lastMessagePreview, userId, conversationId]
+        );
+      }
+
+      const fullMediaUrl = `${req.protocol}://${req.get(
+        "host"
+      )}/uploads/chat/${mediaUrl}`;
+
+      const newMessage = {
+        id: result.insertId,
+        conversation_id: conversationId,
+        sender_id: userId,
+        text: caption,
+        type: messageType,
+        media_url: fullMediaUrl,
+        is_read: false,
+        created_at: new Date().toISOString(),
+      };
+
+      return res.status(201).json({
+        success: true,
+        message: "Media message sent successfully.",
+        data: newMessage,
+      });
+    } catch (err) {
+      // Clean up file on error
+      if (req.file?.path && fs.existsSync(req.file.path)) {
+        fs.unlinkSync(req.file.path);
+      }
+      return sendServerError(res, "Error sending media message", err);
+    }
+  }
+);
 
 /* =========================================================
    MARK MESSAGES AS READ
@@ -520,7 +703,6 @@ router.put(
         });
       }
 
-      // Access check
       const [conversation] = await db.query(
         `
         SELECT id, customer_id, agent_id
@@ -541,7 +723,6 @@ router.put(
 
       const conversationData = conversation[0];
 
-      // Mark messages as read
       const [result] = await db.query(
         `
         UPDATE messages
@@ -553,7 +734,6 @@ router.put(
         [conversationId, userId]
       );
 
-      // Reset the correct unread counter
       if (Number(conversationData.customer_id) === userId) {
         await db.query(
           `UPDATE conversations SET unread_by_customer = 0 WHERE id = ?`,

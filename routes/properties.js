@@ -29,18 +29,38 @@ const storage = multer.diskStorage({
 });
 
 const fileFilter = (req, file, cb) => {
-  const allowed = ["image/jpeg", "image/png", "image/webp", "image/jpg"];
-  if (allowed.includes(file.mimetype)) {
+  const allowedImages = [
+    "image/jpeg",
+    "image/png",
+    "image/webp",
+    "image/jpg",
+    "image/gif",
+  ];
+
+  const allowedVideos = [
+    "video/mp4",
+    "video/webm",
+    "video/quicktime", // .mov
+  ];
+
+  if (allowedImages.includes(file.mimetype) || allowedVideos.includes(file.mimetype)) {
     cb(null, true);
   } else {
-    cb(new Error("Only image files (jpeg, png, webp) are allowed"), false);
+    cb(
+      new Error(
+        "Only image (jpeg, png, webp, gif) and video (mp4, webm, mov) files are allowed"
+      ),
+      false
+    );
   }
 };
 
 const upload = multer({
   storage,
   fileFilter,
-  limits: { fileSize: 5 * 1024 * 1024 }, // 5MB
+  limits: {
+    fileSize: 50 * 1024 * 1024, // 50MB (supports both images and videos)
+  },
 });
 
 /* =========================
@@ -61,8 +81,6 @@ const parseImages = (img) => {
 
 /* =========================
    GET ALL PROPERTIES (public)
-   - Customers & guests see everything
-   - Agents/Landlords still see everything here (for public browse)
 ========================= */
 router.get("/", async (req, res) => {
   try {
@@ -84,7 +102,6 @@ router.get("/", async (req, res) => {
 
 /* =========================
    GET MY PROPERTIES (agent only)
-   This is what the Agent Properties page should call
 ========================= */
 router.get("/my", authenticateToken, async (req, res) => {
   try {
@@ -136,135 +153,147 @@ router.get("/:id", async (req, res) => {
 /* =========================
    CREATE PROPERTY (agent only)
 ========================= */
-router.post("/", authenticateToken, upload.array("images", 10), async (req, res) => {
-  try {
-    const {
-      title,
-      location,
-      price,
-      description,
-      property_type,
-      size,
-      listing_type,
-      status,
-      latitude,
-      longitude,
-    } = req.body;
-
-    if (!title || !location || !price) {
-      return res
-        .status(400)
-        .json({ error: "Title, location and price are required" });
-    }
-
-    // Always use the logged-in user's id
-    const user_id = req.user.id;
-
-    const images = formatImages(req.files);
-
-    const [result] = await pool.query(
-      `INSERT INTO properties
-      (title, location, price, description, property_type, size, listing_type, user_id, status, image, latitude, longitude)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-      [
+router.post(
+  "/",
+  authenticateToken,
+  upload.array("images", 10),
+  async (req, res) => {
+    try {
+      const {
         title,
         location,
         price,
-        description || null,
-        property_type || null,
-        size || null,
-        listing_type || "sale",
-        user_id,
-        status || "available",
-        images,
-        latitude || null,
-        longitude || null,
-      ]
-    );
+        description,
+        property_type,
+        size,
+        listing_type,
+        status,
+        latitude,
+        longitude,
+      } = req.body;
 
-    res.status(201).json({
-      message: "Property created successfully",
-      id: result.insertId,
-      images: parseImages(images),
-    });
-  } catch (err) {
-    console.error("CREATE property error:", err);
-    res.status(500).json({ error: err.message });
+      if (!title || !location || !price) {
+        return res
+          .status(400)
+          .json({ error: "Title, location and price are required" });
+      }
+
+      // Always use the logged-in user's id
+      const user_id = req.user.id;
+
+      const images = formatImages(req.files);
+
+      const [result] = await pool.query(
+        `INSERT INTO properties
+        (title, location, price, description, property_type, size, listing_type, user_id, status, image, latitude, longitude)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        [
+          title,
+          location,
+          price,
+          description || null,
+          property_type || null,
+          size || null,
+          listing_type || "sale",
+          user_id,
+          status || "available",
+          images,
+          latitude || null,
+          longitude || null,
+        ]
+      );
+
+      res.status(201).json({
+        message: "Property created successfully",
+        id: result.insertId,
+        images: parseImages(images),
+      });
+    } catch (err) {
+      console.error("CREATE property error:", err);
+      res.status(500).json({ error: err.message });
+    }
   }
-});
+);
 
 /* =========================
    UPDATE PROPERTY (owner only)
 ========================= */
-router.put("/:id", authenticateToken, upload.array("images", 10), async (req, res) => {
-  try {
-    const {
-      title,
-      location,
-      price,
-      description,
-      property_type,
-      size,
-      listing_type,
-      latitude,
-      longitude,
-    } = req.body;
-
-    // Check ownership
-    const [existing] = await pool.query(
-      "SELECT user_id, image FROM properties WHERE id = ?",
-      [req.params.id]
-    );
-
-    if (!existing.length) {
-      return res.status(404).json({ error: "Property not found" });
-    }
-
-    if (Number(existing[0].user_id) !== Number(req.user.id)) {
-      return res.status(403).json({ error: "You can only edit your own properties" });
-    }
-
-    const newImages = formatImages(req.files);
-    let finalImages = existing[0].image || null;
-
-    if (newImages) {
-      finalImages = newImages;
-    }
-
-    await pool.query(
-      `UPDATE properties SET
-        title = ?,
-        location = ?,
-        price = ?,
-        description = ?,
-        property_type = ?,
-        size = ?,
-        listing_type = ?,
-        image = ?,
-        latitude = ?,
-        longitude = ?
-      WHERE id = ?`,
-      [
+router.put(
+  "/:id",
+  authenticateToken,
+  upload.array("images", 10),
+  async (req, res) => {
+    try {
+      const {
         title,
         location,
         price,
-        description || null,
-        property_type || null,
-        size || null,
-        listing_type || "sale",
-        finalImages,
-        latitude || null,
-        longitude || null,
-        req.params.id,
-      ]
-    );
+        description,
+        property_type,
+        size,
+        listing_type,
+        latitude,
+        longitude,
+      } = req.body;
 
-    res.json({ message: "Property updated successfully" });
-  } catch (err) {
-    console.error("UPDATE property error:", err);
-    res.status(500).json({ error: err.message });
+      // Check ownership
+      const [existing] = await pool.query(
+        "SELECT user_id, image FROM properties WHERE id = ?",
+        [req.params.id]
+      );
+
+      if (!existing.length) {
+        return res.status(404).json({ error: "Property not found" });
+      }
+
+      if (Number(existing[0].user_id) !== Number(req.user.id)) {
+        return res
+          .status(403)
+          .json({ error: "You can only edit your own properties" });
+      }
+
+      const newImages = formatImages(req.files);
+      let finalImages = existing[0].image || null;
+
+      if (newImages) {
+        finalImages = newImages;
+      }
+
+      await pool.query(
+        `UPDATE properties SET
+          title = ?,
+          location = ?,
+          price = ?,
+          description = ?,
+          property_type = ?,
+          size = ?,
+          listing_type = ?,
+          image = ?,
+          latitude = ?,
+          longitude = ?
+        WHERE id = ?`,
+        [
+          title,
+          location,
+          price,
+          description || null,
+          property_type || null,
+          size || null,
+          listing_type || "sale",
+          finalImages,
+          latitude || null,
+          longitude || null,
+          req.params.id,
+        ]
+      );
+
+      res.json({ message: "Property updated successfully" });
+    } catch (err) {
+      console.error("UPDATE property error:", err);
+      res.status(500).json({ error: err.message });
+    }
   }
-});
+);
 
 /* =========================
    DELETE PROPERTY (owner only)
@@ -282,13 +311,12 @@ router.delete("/:id", authenticateToken, async (req, res) => {
     }
 
     if (Number(existing[0].user_id) !== Number(req.user.id)) {
-      return res.status(403).json({ error: "You can only delete your own properties" });
+      return res
+        .status(403)
+        .json({ error: "You can only delete your own properties" });
     }
 
-    const [result] = await pool.query(
-      "DELETE FROM properties WHERE id = ?",
-      [req.params.id]
-    );
+    await pool.query("DELETE FROM properties WHERE id = ?", [req.params.id]);
 
     res.json({ message: "Property deleted successfully" });
   } catch (err) {
