@@ -29,7 +29,7 @@ const agentRoutes = require("./routes/agent");
 const viewsRoutes = require("./routes/views");
 const inquiriesRoutes = require("./routes/inquiries");
 
-const setupChatSocket = require("./socket/chatSocket");
+const setupChatSocket = require("./socket/chatsocket");
 
 const app = express();
 
