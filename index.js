@@ -1,4 +1,5 @@
-// index.js  (or server.js)
+console.log(">>> index.js starting...");
+console.log("PORT =", process.env.PORT);
 
 const express = require("express");
 const cors = require("cors");
@@ -68,6 +69,7 @@ const allowedOrigins = [
   "http://127.0.0.1:8101",
   "http://localhost:5173",
   "http://localhost:3000",
+  "https://dwelio-frontend-production.up.railway.app", // production frontend
 ];
 
 app.use(
@@ -281,7 +283,7 @@ const io = new Server(server, {
     methods: ["GET", "POST"],
     credentials: true,
   },
-  maxHttpBufferSize: 25e6, // 25MB for larger media if needed
+  maxHttpBufferSize: 25e6, // 25MB
 });
 
 // Make io accessible from routes if needed
@@ -293,11 +295,11 @@ setupChatSocket(io);
 // ========================
 // START SERVER
 // ========================
-server.listen(PORT, async () => {
+server.listen(PORT, "0.0.0.0", async () => {
   console.log("");
   console.log("========================================");
   console.log(`🚀 Server running on port ${PORT}`);
-  console.log(`🔗 http://localhost:${PORT}`);
+  console.log(`🔗 http://0.0.0.0:${PORT}`);
   console.log(`📦 Version: ${VERSION}`);
   console.log(`🌍 Environment: ${NODE_ENV}`);
   console.log(`💬 Real-time Chat: ENABLED`);
